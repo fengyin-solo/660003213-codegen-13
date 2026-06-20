@@ -40,13 +40,13 @@ const PHARMACOPHORE_DESCRIPTIONS: Record<PharmacophoreType, string> = {
   negative_charge: '带负电荷的官能团，如羧基、磷酸基等'
 }
 
-const PHARMACOPHORE_DIRECTIONS: Record<PharmacophoreType, string> = {
-  hbond_donor: '沿 N-H/O-H 键方向向外',
-  hbond_acceptor: '沿孤对电子方向向内',
-  hydrophobic: '从基团中心向外辐射',
-  aromatic: '垂直于环平面方向',
-  positive_charge: '从正电荷中心向外发散',
-  negative_charge: '向负电荷中心汇聚'
+const PHARMACOPHORE_ACTION_DIRECTIONS: Record<PharmacophoreType, string> = {
+  hbond_donor: '可与受体蛋白的氢键受体形成氢键，增强分子与靶点的结合亲和力',
+  hbond_acceptor: '可与受体蛋白的氢键供体形成氢键，是重要的结合作用力来源',
+  hydrophobic: '可进入受体的疏水口袋，产生疏水相互作用，是主要结合驱动力',
+  aromatic: '可与受体中的芳香氨基酸发生π-π堆积作用，增强结合特异性',
+  positive_charge: '可与受体的负电荷基团形成盐桥，产生强静电相互作用',
+  negative_charge: '可与受体的正电荷基团形成盐桥，产生强静电相互作用'
 }
 
 function parseSMILES(smiles: string): { atoms: any[]; bonds: any[] } {
@@ -74,9 +74,12 @@ function parseSMILES(smiles: string): { atoms: any[]; bonds: any[] } {
     else if (ch === '=') { pendingBond = 2 }
     else if (ch === '#') { pendingBond = 3 }
     else if (ch === '-') { pendingBond = 1 }
-    else if (/[A-Z]/.test(ch)) {
-      let element = ch
-      if (i + 1 < smiles.length && /[a-z]/.test(smiles[i + 1])) { element += smiles[i + 1]; i++ }
+    else if (/[A-Za-z]/.test(ch)) {
+      let element = ch.toUpperCase()
+      if (i + 1 < smiles.length && /[a-z]/.test(smiles[i + 1]) && ch === ch.toUpperCase()) { 
+        element += smiles[i + 1]
+        i++
+      }
       atoms.push({ element, x: (atoms.length % 3 - 1) * 1.5 + Math.random() * 0.5, y: (Math.floor(atoms.length / 3) % 3 - 1) * 1.5 + Math.random() * 0.5, z: (Math.floor(atoms.length / 9) - 1) * 1.5 + Math.random() * 0.5, color: ATOM_COLORS[element] || '#888', radius: ATOM_RADII[element] || 0.25 })
       if (lastAtom >= 0) bonds.push({ atom1: lastAtom, atom2: atoms.length - 1, order: pendingBond })
       lastAtom = atoms.length - 1
@@ -228,7 +231,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
         type: 'hbond_donor',
         name: PHARMACOPHORE_NAMES.hbond_donor,
         description: PHARMACOPHORE_DESCRIPTIONS.hbond_donor,
-        actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_donor,
+        actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.hbond_donor,
         color: PHARMACOPHORE_COLORS.hbond_donor,
         atomIndices: [idx],
         importance: 'high'
@@ -240,7 +243,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
       type: 'hbond_acceptor',
       name: PHARMACOPHORE_NAMES.hbond_acceptor,
       description: PHARMACOPHORE_DESCRIPTIONS.hbond_acceptor,
-      actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_acceptor,
+      actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.hbond_acceptor,
       color: PHARMACOPHORE_COLORS.hbond_acceptor,
       atomIndices: [idx],
       importance: 'high'
@@ -257,7 +260,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
         type: 'hbond_donor',
         name: PHARMACOPHORE_NAMES.hbond_donor,
         description: PHARMACOPHORE_DESCRIPTIONS.hbond_donor,
-        actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_donor,
+        actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.hbond_donor,
         color: PHARMACOPHORE_COLORS.hbond_donor,
         atomIndices: [idx],
         importance: 'medium'
@@ -269,7 +272,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
       type: 'hbond_acceptor',
       name: PHARMACOPHORE_NAMES.hbond_acceptor,
       description: PHARMACOPHORE_DESCRIPTIONS.hbond_acceptor,
-      actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_acceptor,
+      actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.hbond_acceptor,
       color: PHARMACOPHORE_COLORS.hbond_acceptor,
       atomIndices: [idx],
       importance: 'medium'
@@ -283,7 +286,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
       type: 'aromatic',
       name: `${PHARMACOPHORE_NAMES.aromatic} ${ringIdx + 1}`,
       description: PHARMACOPHORE_DESCRIPTIONS.aromatic,
-      actionDirection: PHARMACOPHORE_DIRECTIONS.aromatic,
+      actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.aromatic,
       color: PHARMACOPHORE_COLORS.aromatic,
       atomIndices: ring,
       importance: 'high'
@@ -339,7 +342,7 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
         type: 'hydrophobic',
         name: `${PHARMACOPHORE_NAMES.hydrophobic} ${chunkIdx + 1}`,
         description: PHARMACOPHORE_DESCRIPTIONS.hydrophobic,
-        actionDirection: PHARMACOPHORE_DIRECTIONS.hydrophobic,
+        actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.hydrophobic,
         color: PHARMACOPHORE_COLORS.hydrophobic,
         atomIndices: chunk,
         importance: chunk.length > 4 ? 'high' : 'medium'
@@ -353,18 +356,19 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
     { pattern: /CN\(C\)/g, importance: 'medium' as const }
   ]
 
+  let nitrogenPtr = 0
   positiveChargePatterns.forEach(({ pattern, importance }) => {
     const matches = mol.smiles.match(pattern)
     if (matches) {
       matches.forEach(() => {
-        const nIdx = nitrogenIndices.shift()
-        if (nIdx !== undefined) {
+        if (nitrogenPtr < nitrogenIndices.length) {
+          const nIdx = nitrogenIndices[nitrogenPtr++]
           features.push({
             id: `feat_${featureId++}`,
             type: 'positive_charge',
             name: PHARMACOPHORE_NAMES.positive_charge,
             description: PHARMACOPHORE_DESCRIPTIONS.positive_charge,
-            actionDirection: PHARMACOPHORE_DIRECTIONS.positive_charge,
+            actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.positive_charge,
             color: PHARMACOPHORE_COLORS.positive_charge,
             atomIndices: [nIdx],
             importance
@@ -380,18 +384,19 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
     { pattern: /S\(=O\)/g, importance: 'medium' as const }
   ]
 
+  let oxygenPtr = 0
   negativeChargePatterns.forEach(({ pattern, importance }) => {
     const matches = mol.smiles.match(pattern)
     if (matches) {
       matches.forEach(() => {
-        const oIdx = oxygenIndices.shift()
-        if (oIdx !== undefined) {
+        if (oxygenPtr < oxygenIndices.length) {
+          const oIdx = oxygenIndices[oxygenPtr++]
           features.push({
             id: `feat_${featureId++}`,
             type: 'negative_charge',
             name: PHARMACOPHORE_NAMES.negative_charge,
             description: PHARMACOPHORE_DESCRIPTIONS.negative_charge,
-            actionDirection: PHARMACOPHORE_DIRECTIONS.negative_charge,
+            actionDirection: PHARMACOPHORE_ACTION_DIRECTIONS.negative_charge,
             color: PHARMACOPHORE_COLORS.negative_charge,
             atomIndices: [oIdx],
             importance
@@ -422,9 +427,12 @@ export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula:
     `${typeCounts.positive_charge > 0 ? typeCounts.positive_charge + '个正电中心、' : ''}` +
     `${typeCounts.negative_charge > 0 ? typeCounts.negative_charge + '个负电中心、' : ''}`
 
+  const baseSummary = summary.replace(/、$/, '')
+  const fullSummary = baseSummary + '。这些药效团特征共同决定了该分子与靶点蛋白的结合模式和活性强度。'
+
   return {
     features,
-    summary: summary.replace(/、$/, '')
+    summary: fullSummary
   }
 }
 
