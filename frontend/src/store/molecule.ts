@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { MoleculeData, ADMETProps } from '../types'
+import type { MoleculeData, ADMETProps, PharmacophoreData, PharmacophoreFeature, PharmacophoreType } from '../types'
 
 const ATOM_COLORS: Record<string, string> = {
   C: '#6b7280', N: '#3b82f6', O: '#ef4444', S: '#eab308',
@@ -11,6 +11,42 @@ const ATOM_COLORS: Record<string, string> = {
 const ATOM_RADII: Record<string, number> = {
   C: 0.3, N: 0.25, O: 0.22, S: 0.35, P: 0.35,
   H: 0.15, F: 0.18, Cl: 0.3, Br: 0.35, I: 0.4
+}
+
+const PHARMACOPHORE_COLORS: Record<PharmacophoreType, string> = {
+  hbond_donor: '#22c55e',
+  hbond_acceptor: '#ef4444',
+  hydrophobic: '#f59e0b',
+  aromatic: '#8b5cf6',
+  positive_charge: '#3b82f6',
+  negative_charge: '#ec4899'
+}
+
+const PHARMACOPHORE_NAMES: Record<PharmacophoreType, string> = {
+  hbond_donor: '氢键供体',
+  hbond_acceptor: '氢键受体',
+  hydrophobic: '疏水基团',
+  aromatic: '芳香环',
+  positive_charge: '正电荷中心',
+  negative_charge: '负电荷中心'
+}
+
+const PHARMACOPHORE_DESCRIPTIONS: Record<PharmacophoreType, string> = {
+  hbond_donor: '能够提供氢原子形成氢键的基团，如羟基、氨基等',
+  hbond_acceptor: '能够接受氢原子形成氢键的基团，如羰基、醚氧等',
+  hydrophobic: '不溶于水的非极性基团，如烷基、芳环等',
+  aromatic: '具有芳香性的环状结构，如苯环、吡啶环等',
+  positive_charge: '带正电荷的官能团，如氨基、胍基等',
+  negative_charge: '带负电荷的官能团，如羧基、磷酸基等'
+}
+
+const PHARMACOPHORE_DIRECTIONS: Record<PharmacophoreType, string> = {
+  hbond_donor: '沿 N-H/O-H 键方向向外',
+  hbond_acceptor: '沿孤对电子方向向内',
+  hydrophobic: '从基团中心向外辐射',
+  aromatic: '垂直于环平面方向',
+  positive_charge: '从正电荷中心向外发散',
+  negative_charge: '向负电荷中心汇聚'
 }
 
 function parseSMILES(smiles: string): { atoms: any[]; bonds: any[] } {
@@ -97,10 +133,307 @@ export function computeADMET(mol: { mw: number; logP: number; formula: string })
   }
 }
 
+function findAromaticRings(atoms: any[], bonds: any[]): number[][] {
+  const adjacency: number[][] = atoms.map(() => [])
+  bonds.forEach(bond => {
+    adjacency[bond.atom1].push(bond.atom2)
+    adjacency[bond.atom2].push(bond.atom1)
+  })
+
+  const rings: number[][] = []
+  const visited = new Set<number>()
+
+  function dfs(node: number, start: number, path: number[], depth: number) {
+    if (depth > 6) return
+    if (node === start && depth >= 3) {
+      const ring = [...path].sort((a, b) => a - b)
+      const ringKey = ring.join(',')
+      if (!rings.some(r => r.join(',') === ringKey) && path.length >= 5 && path.length <= 7) {
+        rings.push([...path])
+      }
+      return
+    }
+    if (visited.has(node)) return
+
+    visited.add(node)
+    path.push(node)
+
+    for (const neighbor of adjacency[node]) {
+      if (neighbor === start && path.length >= 3) {
+        dfs(neighbor, start, [...path], depth + 1)
+      } else if (!visited.has(neighbor)) {
+        dfs(neighbor, start, [...path], depth + 1)
+      }
+    }
+
+    visited.delete(node)
+    path.pop()
+  }
+
+  for (let i = 0; i < atoms.length; i++) {
+    if (atoms[i].element === 'C' || atoms[i].element === 'N') {
+      visited.clear()
+      dfs(i, i, [], 0)
+    }
+  }
+
+  const aromaticRings: number[][] = []
+  rings.forEach(ring => {
+    const hasCarbon = ring.some(idx => atoms[idx]?.element === 'C')
+    const size = ring.length
+    if (hasCarbon && size >= 5 && size <= 7) {
+      aromaticRings.push(ring)
+    }
+  })
+
+  return aromaticRings
+}
+
+export function computePharmacophore(mol: { atoms: any[]; bonds: any[]; formula: string; smiles: string }): PharmacophoreData {
+  const features: PharmacophoreFeature[] = []
+  let featureId = 0
+
+  const oxygenIndices: number[] = []
+  const nitrogenIndices: number[] = []
+  const sulfurIndices: number[] = []
+  const carbonIndices: number[] = []
+  const fluorineIndices: number[] = []
+  const chlorineIndices: number[] = []
+  const bromineIndices: number[] = []
+
+  mol.atoms.forEach((atom, idx) => {
+    if (atom.element === 'O') oxygenIndices.push(idx)
+    else if (atom.element === 'N') nitrogenIndices.push(idx)
+    else if (atom.element === 'S') sulfurIndices.push(idx)
+    else if (atom.element === 'C') carbonIndices.push(idx)
+    else if (atom.element === 'F') fluorineIndices.push(idx)
+    else if (atom.element === 'Cl') chlorineIndices.push(idx)
+    else if (atom.element === 'Br') bromineIndices.push(idx)
+  })
+
+  const adjacency: number[][] = mol.atoms.map(() => [])
+  mol.bonds.forEach(bond => {
+    adjacency[bond.atom1].push(bond.atom2)
+    adjacency[bond.atom2].push(bond.atom1)
+  })
+
+  oxygenIndices.forEach(idx => {
+    const neighbors = adjacency[idx]
+    const hasHydrogenNeighbor = neighbors.some(n => mol.atoms[n]?.element === 'H')
+    const isDonor = hasHydrogenNeighbor || mol.smiles.includes('O)') || mol.smiles.includes('OH')
+
+    if (isDonor) {
+      features.push({
+        id: `feat_${featureId++}`,
+        type: 'hbond_donor',
+        name: PHARMACOPHORE_NAMES.hbond_donor,
+        description: PHARMACOPHORE_DESCRIPTIONS.hbond_donor,
+        actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_donor,
+        color: PHARMACOPHORE_COLORS.hbond_donor,
+        atomIndices: [idx],
+        importance: 'high'
+      })
+    }
+
+    features.push({
+      id: `feat_${featureId++}`,
+      type: 'hbond_acceptor',
+      name: PHARMACOPHORE_NAMES.hbond_acceptor,
+      description: PHARMACOPHORE_DESCRIPTIONS.hbond_acceptor,
+      actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_acceptor,
+      color: PHARMACOPHORE_COLORS.hbond_acceptor,
+      atomIndices: [idx],
+      importance: 'high'
+    })
+  })
+
+  nitrogenIndices.forEach(idx => {
+    const neighbors = adjacency[idx]
+    const hasHydrogenNeighbor = neighbors.some(n => mol.atoms[n]?.element === 'H')
+
+    if (hasHydrogenNeighbor) {
+      features.push({
+        id: `feat_${featureId++}`,
+        type: 'hbond_donor',
+        name: PHARMACOPHORE_NAMES.hbond_donor,
+        description: PHARMACOPHORE_DESCRIPTIONS.hbond_donor,
+        actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_donor,
+        color: PHARMACOPHORE_COLORS.hbond_donor,
+        atomIndices: [idx],
+        importance: 'medium'
+      })
+    }
+
+    features.push({
+      id: `feat_${featureId++}`,
+      type: 'hbond_acceptor',
+      name: PHARMACOPHORE_NAMES.hbond_acceptor,
+      description: PHARMACOPHORE_DESCRIPTIONS.hbond_acceptor,
+      actionDirection: PHARMACOPHORE_DIRECTIONS.hbond_acceptor,
+      color: PHARMACOPHORE_COLORS.hbond_acceptor,
+      atomIndices: [idx],
+      importance: 'medium'
+    })
+  })
+
+  const aromaticRings = findAromaticRings(mol.atoms, mol.bonds)
+  aromaticRings.forEach((ring, ringIdx) => {
+    features.push({
+      id: `feat_${featureId++}`,
+      type: 'aromatic',
+      name: `${PHARMACOPHORE_NAMES.aromatic} ${ringIdx + 1}`,
+      description: PHARMACOPHORE_DESCRIPTIONS.aromatic,
+      actionDirection: PHARMACOPHORE_DIRECTIONS.aromatic,
+      color: PHARMACOPHORE_COLORS.aromatic,
+      atomIndices: ring,
+      importance: 'high'
+    })
+  })
+
+  const hydrophobicAtoms = [
+    ...carbonIndices.filter(idx => {
+      const neighbors = adjacency[idx]
+      const hasOnlyCarbonOrHydrogen = neighbors.every(n => {
+        const el = mol.atoms[n]?.element
+        return el === 'C' || el === 'H'
+      })
+      return hasOnlyCarbonOrHydrogen
+    }),
+    ...fluorineIndices,
+    ...chlorineIndices,
+    ...bromineIndices,
+    ...sulfurIndices
+  ]
+
+  if (hydrophobicAtoms.length > 0) {
+    const chunks: number[][] = []
+    const visitedHydro = new Set<number>()
+
+    hydrophobicAtoms.forEach(atomIdx => {
+      if (visitedHydro.has(atomIdx)) return
+
+      const chunk: number[] = []
+      const queue = [atomIdx]
+      visitedHydro.add(atomIdx)
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        chunk.push(current)
+
+        adjacency[current].forEach(neighbor => {
+          if (hydrophobicAtoms.includes(neighbor) && !visitedHydro.has(neighbor)) {
+            visitedHydro.add(neighbor)
+            queue.push(neighbor)
+          }
+        })
+      }
+
+      if (chunk.length >= 2) {
+        chunks.push(chunk)
+      }
+    })
+
+    chunks.forEach((chunk, chunkIdx) => {
+      features.push({
+        id: `feat_${featureId++}`,
+        type: 'hydrophobic',
+        name: `${PHARMACOPHORE_NAMES.hydrophobic} ${chunkIdx + 1}`,
+        description: PHARMACOPHORE_DESCRIPTIONS.hydrophobic,
+        actionDirection: PHARMACOPHORE_DIRECTIONS.hydrophobic,
+        color: PHARMACOPHORE_COLORS.hydrophobic,
+        atomIndices: chunk,
+        importance: chunk.length > 4 ? 'high' : 'medium'
+      })
+    })
+  }
+
+  const positiveChargePatterns = [
+    { pattern: /\[N\+\]/g, importance: 'high' as const },
+    { pattern: /NC\(=N\)N/g, importance: 'high' as const },
+    { pattern: /CN\(C\)/g, importance: 'medium' as const }
+  ]
+
+  positiveChargePatterns.forEach(({ pattern, importance }) => {
+    const matches = mol.smiles.match(pattern)
+    if (matches) {
+      matches.forEach(() => {
+        const nIdx = nitrogenIndices.shift()
+        if (nIdx !== undefined) {
+          features.push({
+            id: `feat_${featureId++}`,
+            type: 'positive_charge',
+            name: PHARMACOPHORE_NAMES.positive_charge,
+            description: PHARMACOPHORE_DESCRIPTIONS.positive_charge,
+            actionDirection: PHARMACOPHORE_DIRECTIONS.positive_charge,
+            color: PHARMACOPHORE_COLORS.positive_charge,
+            atomIndices: [nIdx],
+            importance
+          })
+        }
+      })
+    }
+  })
+
+  const negativeChargePatterns = [
+    { pattern: /C\(=O\)O/g, importance: 'high' as const },
+    { pattern: /\[O-\]/g, importance: 'high' as const },
+    { pattern: /S\(=O\)/g, importance: 'medium' as const }
+  ]
+
+  negativeChargePatterns.forEach(({ pattern, importance }) => {
+    const matches = mol.smiles.match(pattern)
+    if (matches) {
+      matches.forEach(() => {
+        const oIdx = oxygenIndices.shift()
+        if (oIdx !== undefined) {
+          features.push({
+            id: `feat_${featureId++}`,
+            type: 'negative_charge',
+            name: PHARMACOPHORE_NAMES.negative_charge,
+            description: PHARMACOPHORE_DESCRIPTIONS.negative_charge,
+            actionDirection: PHARMACOPHORE_DIRECTIONS.negative_charge,
+            color: PHARMACOPHORE_COLORS.negative_charge,
+            atomIndices: [oIdx],
+            importance
+          })
+        }
+      })
+    }
+  })
+
+  const typeCounts: Record<PharmacophoreType, number> = {
+    hbond_donor: 0,
+    hbond_acceptor: 0,
+    hydrophobic: 0,
+    aromatic: 0,
+    positive_charge: 0,
+    negative_charge: 0
+  }
+
+  features.forEach(f => {
+    typeCounts[f.type]++
+  })
+
+  const summary = `该分子包含 ${features.length} 个药效团特征：` +
+    `${typeCounts.hbond_donor > 0 ? typeCounts.hbond_donor + '个氢键供体、' : ''}` +
+    `${typeCounts.hbond_acceptor > 0 ? typeCounts.hbond_acceptor + '个氢键受体、' : ''}` +
+    `${typeCounts.hydrophobic > 0 ? typeCounts.hydrophobic + '个疏水基团、' : ''}` +
+    `${typeCounts.aromatic > 0 ? typeCounts.aromatic + '个芳香环、' : ''}` +
+    `${typeCounts.positive_charge > 0 ? typeCounts.positive_charge + '个正电中心、' : ''}` +
+    `${typeCounts.negative_charge > 0 ? typeCounts.negative_charge + '个负电中心、' : ''}`
+
+  return {
+    features,
+    summary: summary.replace(/、$/, '')
+  }
+}
+
 export const useMoleculeStore = defineStore('molecule', () => {
   const molecules = ref<MoleculeData[]>([])
   const currentMolecule = ref<MoleculeData | null>(null)
   const admet = ref<ADMETProps | null>(null)
+  const pharmacophore = ref<PharmacophoreData | null>(null)
+  const highlightedFeatureId = ref<string | null>(null)
   const searchQuery = ref('')
   const searchResults = ref<MoleculeData[]>([])
   const isLoading = ref(false)
@@ -122,11 +455,16 @@ export const useMoleculeStore = defineStore('molecule', () => {
   function selectMolecule(mol: MoleculeData) {
     currentMolecule.value = mol
     admet.value = computeADMET({ mw: mol.mw, logP: mol.logP, formula: mol.formula })
+    pharmacophore.value = computePharmacophore({ atoms: mol.atoms, bonds: mol.bonds, formula: mol.formula, smiles: mol.smiles })
   }
 
   function searchMolecules(query: string) {
     searchQuery.value = query
     searchResults.value = filteredMolecules.value
+  }
+
+  function setHighlightedFeature(id: string | null) {
+    highlightedFeatureId.value = id
   }
 
   function computeTanimoto(smiles1: string, smiles2: string): number {
@@ -148,8 +486,9 @@ export const useMoleculeStore = defineStore('molecule', () => {
   })
 
   return {
-    molecules, currentMolecule, admet, searchQuery, searchResults, isLoading,
+    molecules, currentMolecule, admet, pharmacophore, highlightedFeatureId,
+    searchQuery, searchResults, isLoading,
     filteredMolecules, similarMolecules,
-    loadMolecules, selectMolecule, searchMolecules
+    loadMolecules, selectMolecule, searchMolecules, setHighlightedFeature
   }
 })
